@@ -95,6 +95,18 @@ def handle_email_request():
     else:
         # Returns the 500 status on SMTP failure
         return jsonify({"status": "error", "details": message}), 500
+#testpoint
+@app.route('/api/status')
+def status_check():
+    """Simple status check endpoint for Render environment verification."""
+    safe_status = {
+        "status": "running ✅",
+        "SMTP_HOST": SMTP_HOST,
+        "SMTP_PORT": SMTP_PORT,
+        "SENDER_EMAIL": SENDER_EMAIL,
+        "env_loaded": all([SMTP_HOST, SMTP_PORT, SENDER_EMAIL, SENDER_PASSWORD])
+    }
+    return jsonify(safe_status), 200
 
 
 if __name__ == '__main__':
