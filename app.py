@@ -55,18 +55,13 @@ def send_automated_email(receiver_email, subject, body):
     
     # 3. Attempt to connect and send
     try:
-        # Use smtplib.SMTP for port 587 and STARTTLS
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.ehlo()
+        # Using smtplib.SMTP_SSL for direct SSL connection (Port 465)
+        with smtplib.SMTP_SSL(SMTP_HOST, 465, context=context) as server: 
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
         return True, "Email sent successfully."
     except Exception as e:
-        # This will now clearly show the failure reason (e.g., SMTPAuthenticationError)
         print(f"!!! SMTP Error during send: {e} !!!")
-        # Return a sanitized error message to the frontend
         return False, f"Failed to send email due to authentication or connection failure."
 
 
