@@ -1,32 +1,47 @@
 import os
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
-from flask_cors import CORS  # <-- New Import for CORS
+from flask_cors import CORS
 import smtplib
 from email.message import EmailMessage
 import ssl
 
-# Load environment variables from .env file
+# Load environment variables from .env file (for local testing)
 load_dotenv()
 
-# --- Configuration Loading ---
+# --- Configuration Loading with Safety Checks (CRITICAL) ---
+
+# Get values, but keep SMTP_PORT as string for now
 SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT")) # Ensure port is an integer
+SMTP_PORT_STR = os.getenv("SMTP_PORT")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 
-# --- Flask App Initialization ---
+# 1. Check for missing environment variables
+required_vars = [SMTP_HOST, SMTP_PORT_STR, SENDER_EMAIL, SENDER_PASSWORD]
+if not all(required_vars):
+    missing = [name for name, val in zip(["SMTP_HOST", "SMTP_PORT", "SENDER_EMAIL", "SENDER_PASSWORD"], required_vars) if not val]
+    print(f"!!! FATAL CONFIGURATION ERROR !!! Missing required environment variables: {', '.join(missing)}")
+    # This explicit crash ensures Render logs show WHICH variable is missing.
+    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}. Check Render settings.")
+
+# 2. Safely convert port to integer
+try:
+    SMTP_PORT = int(SMTP_PORT_STR)
+except ValueError:
+    print("!!! FATAL CONFIGURATION ERROR !!! SMTP_PORT must be a valid integer.")
+    raise ValueError("SMTP_PORT is not a valid integer. Check Render settings.")
+
+# --- Flask App Initialization & CORS ---
 app = Flask(__name__)
 
-# ---------------------------------------------------------------------
-# CRITICAL: Configure CORS to ONLY allow your ConnectHub website to access this API.
+# CRITICAL: Configure CORS to ONLY allow your ConnectHub website
 ALLOWED_ORIGIN = "https://connecthub-xpy1.onrender.com"
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}})
-# ---------------------------------------------------------------------
 
 # --- Core Email Sending Function ---
 def send_automated_email(receiver_email, subject, body):
-    """Handles the actual sending logic using credentials from .env"""
+    """Handles the actual sending logic using credentials from environment variables."""
     
     # 1. Construct the message
     msg = EmailMessage()
@@ -49,32 +64,27 @@ def send_automated_email(receiver_email, subject, body):
             server.send_message(msg)
         return True, "Email sent successfully."
     except Exception as e:
-        # Log the detailed error for debugging (this will appear in your server console)
-        print(f"SMTP Error: {e}")
+        # This will now clearly show the failure reason (e.g., SMTPAuthenticationError)
+        print(f"!!! SMTP Error during send: {e} !!!")
         # Return a sanitized error message to the frontend
-        return False, f"Failed to send email due to server misconfiguration."
+        return False, f"Failed to send email due to authentication or connection failure."
 
 
 # --- Flask Route (The API Endpoint) ---
 @app.route('/api/send-response', methods=['POST'])
 def handle_email_request():
-    # Ensure the request is JSON
     if not request.is_json:
         return jsonify({"error": "Missing JSON in request"}), 400
 
     data = request.get_json()
-    
-    # Extract necessary data from the incoming JSON request
-    # These keys MUST match the payload sent by the frontend: { "receiver": ..., "message": ... }
     receiver = data.get('receiver')
     user_message = data.get('message')
     
     if not receiver or not user_message:
         return jsonify({"error": "Missing 'receiver' or 'message' fields in request data"}), 400
 
-    # --- Automated Response Body ---
+    # Automated Response Body
     response_subject = "ConnectHub: Your Inquiry Has Been Received"
-    # Create an automated body, echoing a snippet of the user's message
     response_body = (
         f"Dear User,\n\n"
         f"Thank you for contacting us. Your message (starting with: '{user_message[:50]}...') "
@@ -82,17 +92,16 @@ def handle_email_request():
         f"Best Regards,\nThe ConnectHub Assistant"
     )
     
-    # --- Execute Sending ---
+    # Execute Sending
     success, message = send_automated_email(receiver, response_subject, response_body)
     
     if success:
-        # Success status 200
         return jsonify({"status": "success", "details": message}), 200
     else:
-        # Server-side error status 500
+        # Returns the 500 status on SMTP failure
         return jsonify({"status": "error", "details": message}), 500
 
 
 if __name__ == '__main__':
-    # You MUST set debug=False when deploying to a public server!
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # Use os.environ.get('PORT', ...) for better compatibility with Render environments
+    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=False)
