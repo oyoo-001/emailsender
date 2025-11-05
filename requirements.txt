@@ -18,11 +18,7 @@ h11==0.16.0
 idna==3.10
 itsdangerous==2.2.0
 Jinja2==3.1.6
-Kivy==2.3.1
-Kivy-Garden==0.1.5
-kivy_deps.angle==0.4.0
-kivy_deps.glew==0.3.1
-kivy_deps.sdl2==0.8.0
+
 MarkupSafe==3.0.3
 proxy_tools==0.1.0
 pycparser==2.23
