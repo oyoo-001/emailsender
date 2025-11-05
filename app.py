@@ -31,7 +31,7 @@ try:
 except ValueError:
     print("!!! FATAL CONFIGURATION ERROR !!! SMTP_PORT must be a valid integer.")
     raise ValueError("SMTP_PORT is not a valid integer. Check Render settings.")
-
+print(f"--- RENDER ENV DEBUG --- Password Length: {len(SENDER_PASSWORD)}, Start: {SENDER_PASSWORD[:5]}, End: {SENDER_PASSWORD[-5:]}")
 # --- Flask App Initialization & CORS ---
 app = Flask(__name__)
 
