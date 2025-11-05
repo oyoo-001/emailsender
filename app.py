@@ -95,4 +95,4 @@ def handle_email_request():
 
 if __name__ == '__main__':
     # You MUST set debug=False when deploying to a public server!
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
