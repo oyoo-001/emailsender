@@ -1,114 +1,152 @@
 import os
-from dotenv import load_dotenv
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import secrets
+import time
+import uuid
 import smtplib
 from email.message import EmailMessage
 import ssl
 
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
 # Load environment variables from .env file (for local testing)
 load_dotenv()
 
-# --- Configuration Loading with Safety Checks (CRITICAL) ---
-
-# Get values, but keep SMTP_PORT as string for now
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT_STR = os.getenv("SMTP_PORT")
+# --- Configuration & State ---
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT_STR = os.getenv("SMTP_PORT", "587")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
+# IMPORTANT: Use the single-quoted value for the Render environment
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD") 
 
-# 1. Check for missing environment variables
-required_vars = [SMTP_HOST, SMTP_PORT_STR, SENDER_EMAIL, SENDER_PASSWORD]
-if not all(required_vars):
-    missing = [name for name, val in zip(["SMTP_HOST", "SMTP_PORT", "SENDER_EMAIL", "SENDER_PASSWORD"], required_vars) if not val]
-    print(f"!!! FATAL CONFIGURATION ERROR !!! Missing required environment variables: {', '.join(missing)}")
-    # This explicit crash ensures Render logs show WHICH variable is missing.
-    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}. Check Render settings.")
-
-# 2. Safely convert port to integer
 try:
     SMTP_PORT = int(SMTP_PORT_STR)
 except ValueError:
-    print("!!! FATAL CONFIGURATION ERROR !!! SMTP_PORT must be a valid integer.")
-    raise ValueError("SMTP_PORT is not a valid integer. Check Render settings.")
-print(f"--- RENDER ENV DEBUG --- Password Length: {len(SENDER_PASSWORD)}, Start: {SENDER_PASSWORD[:5]}, End: {SENDER_PASSWORD[-5:]}")
-# --- Flask App Initialization & CORS ---
-app = Flask(__name__)
+    SMTP_PORT = 587
+    print(f"Warning: SMTP_PORT is invalid, defaulting to {SMTP_PORT}")
 
-# CRITICAL: Configure CORS to ONLY allow your ConnectHub website
+# In-memory store for OTPs: {session_id: {'otp': '123456', 'email': 'user@example.com', 'expiry': 1678886400}}
+# For a production app, this should be a persistent store like Redis or Firestore.
+OTP_STORE = {}
+OTP_EXPIRY_SECONDS = 300  # 5 minutes
+
+# --- Flask App Initialization ---
+app = Flask(__name__)
+# Allow CORS for your frontend URL for local testing/Render deployment
 ALLOWED_ORIGIN = "https://connecthub-xpy1.onrender.com"
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}})
 
-# --- Core Email Sending Function ---
-def send_automated_email(receiver_email, subject, body):
-    """Handles the actual sending logic using credentials from environment variables."""
+# --- Core Email Sending Function (Reused) ---
+def send_otp_email(receiver_email, otp_code):
+    """Sends the OTP email using the validated configuration."""
     
-    # 1. Construct the message
+    subject = "ConnectHub OTP Verification Code"
+    body = (
+        f"Your One-Time Password (OTP) is: {otp_code}\n\n"
+        f"This code is valid for {OTP_EXPIRY_SECONDS // 60} minutes. "
+        "Please use it to complete your verification.\n\n"
+        "If you did not request this code, please ignore this email."
+    )
+    
     msg = EmailMessage()
     msg['Subject'] = subject
     msg['From'] = SENDER_EMAIL
     msg['To'] = receiver_email
     msg.set_content(body)
     
-    # 2. Prepare for secure connection
     context = ssl.create_default_context()
     
-    # 3. Attempt to connect and send
     try:
-        # Using smtplib.SMTP_SSL for direct SSL connection (Port 465)
-        with smtplib.SMTP_SSL(SMTP_HOST, 465, context=context) as server: 
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
-        return True, "Email sent successfully."
+        if SMTP_PORT == 465:
+            # Use smtplib.SMTP_SSL for Port 465 (direct SSL connection)
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+                server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                server.send_message(msg)
+        else: # Default to 587 (STARTTLS)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+                server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                server.send_message(msg)
+        return True, "OTP email sent successfully."
     except Exception as e:
-        print(f"!!! SMTP Error during send: {e} !!!")
-        return False, f"Failed to send email due to authentication or connection failure."
+        print(f"!!! SMTP Error during OTP send: {e} !!!")
+        return False, "Failed to send OTP email due to authentication or connection failure."
 
+# --- API Endpoints ---
 
-# --- Flask Route (The API Endpoint) ---
-@app.route('/api/send-response', methods=['POST'])
-def handle_email_request():
+@app.route('/api/generate-otp', methods=['POST'])
+def generate_otp_endpoint():
+    """Generates a new OTP, stores it, and sends it to the user's email."""
     if not request.is_json:
         return jsonify({"error": "Missing JSON in request"}), 400
 
     data = request.get_json()
-    receiver = data.get('receiver')
-    user_message = data.get('message')
-    
-    if not receiver or not user_message:
-        return jsonify({"error": "Missing 'receiver' or 'message' fields in request data"}), 400
+    email = data.get('email')
 
-    # Automated Response Body
-    response_subject = "ConnectHub: Your Inquiry Has Been Received"
-    response_body = (
-        f"Dear User,\n\n"
-        f"Thank you for contacting us. Your message (starting with: '{user_message[:50]}...') "
-        f"has been received by our assistant. We will review your full message and respond personally soon.\n\n"
-        f"Best Regards,\nThe ConnectHub Assistant"
-    )
-    
-    # Execute Sending
-    success, message = send_automated_email(receiver, response_subject, response_body)
-    
-    if success:
-        return jsonify({"status": "success", "details": message}), 200
-    else:
-        # Returns the 500 status on SMTP failure
-        return jsonify({"status": "error", "details": message}), 500
-#testpoint
-@app.route('/api/status')
-def status_check():
-    """Simple status check endpoint for Render environment verification."""
-    safe_status = {
-        "status": "running ✅",
-        "SMTP_HOST": SMTP_HOST,
-        "SMTP_PORT": SMTP_PORT,
-        "SENDER_EMAIL": SENDER_EMAIL,
-        "env_loaded": all([SMTP_HOST, SMTP_PORT, SENDER_EMAIL, SENDER_PASSWORD])
+    if not email:
+        return jsonify({"error": "Missing 'email' field"}), 400
+
+    # 1. Generate OTP and Session ID
+    otp_code = secrets.randbelow(900000) + 100000 # 6-digit number
+    session_id = str(uuid.uuid4())
+    expiry_time = time.time() + OTP_EXPIRY_SECONDS
+
+    # 2. Store OTP in memory
+    OTP_STORE[session_id] = {
+        'otp': str(otp_code),
+        'email': email,
+        'expiry': expiry_time
     }
-    return jsonify(safe_status), 200
 
+    # 3. Send the OTP via email
+    success, message = send_otp_email(email, str(otp_code))
+
+    if success:
+        return jsonify({
+            "status": "success",
+            "message": "OTP sent to email.",
+            "session_id": session_id,
+            "expires_in_seconds": OTP_EXPIRY_SECONDS
+        }), 200
+    else:
+        return jsonify({"status": "error", "message": message}), 500
+
+@app.route('/api/verify-otp', methods=['POST'])
+def verify_otp_endpoint():
+    """Verifies the user-provided OTP against the stored one."""
+    if not request.is_json:
+        return jsonify({"error": "Missing JSON in request"}), 400
+
+    data = request.get_json()
+    session_id = data.get('session_id')
+    otp_code = data.get('otp_code')
+
+    if not session_id or not otp_code:
+        return jsonify({"error": "Missing 'session_id' or 'otp_code'"}), 400
+
+    stored_otp_data = OTP_STORE.get(session_id)
+
+    if not stored_otp_data:
+        return jsonify({"status": "error", "message": "Invalid or expired session ID."}), 404
+
+    # Check expiration
+    if time.time() > stored_otp_data['expiry']:
+        del OTP_STORE[session_id] # Clean up expired OTP
+        return jsonify({"status": "error", "message": "OTP has expired. Please request a new one."}), 400
+
+    # Check OTP match
+    if otp_code == stored_otp_data['otp']:
+        del OTP_STORE[session_id] # Consumed OTP should be removed
+        return jsonify({"status": "success", "message": "OTP verified successfully."}), 200
+    else:
+        return jsonify({"status": "error", "message": "Invalid OTP code."}), 400
 
 if __name__ == '__main__':
-    # Use os.environ.get('PORT', ...) for better compatibility with Render environments
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=False)
+    # Ensure all required environment variables are set before starting
+    if not all([SENDER_EMAIL, SENDER_PASSWORD]):
+        print("!!! FATAL: SENDER_EMAIL or SENDER_PASSWORD not set. Cannot run. !!!")
+    else:
+        app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=False)
