@@ -35,7 +35,11 @@ OTP_EXPIRY_SECONDS = 300  # 5 minutes
 app = Flask(__name__)
 # Allow CORS for your frontend URL for local testing/Render deployment
 ALLOWED_ORIGIN = "https://connecthub-xpy1.onrender.com"
-CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}})
+# ...
+CORS(app, resources={r"/api/*": {
+    "origins": [ALLOWED_ORIGIN], # 👈 Use a list for robustness
+    "methods": ["GET", "POST", "OPTIONS"] # 👈 CRITICAL: Allows the preflight check
+}})
 
 # --- Core Email Sending Function (Reused) ---
 def send_otp_email(receiver_email, otp_code):
