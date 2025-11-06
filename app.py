@@ -43,41 +43,49 @@ CORS(app, resources={r"/api/*": {
 
 # --- Core Email Sending Function (Reused) ---
 def send_otp_email(receiver_email, otp_code):
-    """Sends the OTP email using the validated configuration."""
-    
+    """Sends a professional OTP email using validated configuration."""
+
     subject = "ConnectHub OTP Verification Code"
     body = (
+        f"Dear User,\n\n"
         f"Your One-Time Password (OTP) is: {otp_code}\n\n"
-        f"This code is valid for {OTP_EXPIRY_SECONDS // 60} minutes. "
-        "Please use it to complete your verification.\n\n"
-        "If you did not request this code, please ignore this email."
+        f"This code will expire in {OTP_EXPIRY_SECONDS // 60} minutes. "
+        f"Please use it to complete your verification process.\n\n"
+        f"If you did not request this verification code, kindly disregard this email.\n\n"
+        f"Best regards,\n"
+        f"ConnectHub Security Team\n"
+        f"no-reply@connecthub.com"
     )
-    
+
     msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = receiver_email
+    msg["Subject"] = subject
+    msg["From"] = f"ConnectHub  <{SENDER_EMAIL}>"
+    msg["To"] = receiver_email
     msg.set_content(body)
-    
+
     context = ssl.create_default_context()
-    
+
     try:
         if SMTP_PORT == 465:
             # Use smtplib.SMTP_SSL for Port 465 (direct SSL connection)
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
                 server.login(SENDER_EMAIL, SENDER_PASSWORD)
                 server.send_message(msg)
-        else: # Default to 587 (STARTTLS)
+        else:
+            # Use smtplib.SMTP with STARTTLS for Port 587
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
                 server.ehlo()
                 server.starttls(context=context)
                 server.ehlo()
                 server.login(SENDER_EMAIL, SENDER_PASSWORD)
                 server.send_message(msg)
+
         return True, "OTP email sent successfully."
+
     except Exception as e:
         print(f"!!! SMTP Error during OTP send: {e} !!!")
         return False, "Failed to send OTP email due to authentication or connection failure."
+
 
 # --- API Endpoints ---
 
