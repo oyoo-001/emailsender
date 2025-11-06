@@ -19,7 +19,7 @@ SMTP_PORT_STR = os.getenv("SMTP_PORT", "587")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 # IMPORTANT: Use the single-quoted value for the Render environment
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD") 
-
+ADMIN_EMAIL = "oyoookoth42@gmail.com"
 try:
     SMTP_PORT = int(SMTP_PORT_STR)
 except ValueError:
@@ -27,7 +27,6 @@ except ValueError:
     print(f"Warning: SMTP_PORT is invalid, defaulting to {SMTP_PORT}")
 
 # In-memory store for OTPs: {session_id: {'otp': '123456', 'email': 'user@example.com', 'expiry': 1678886400}}
-# For a production app, this should be a persistent store like Redis or Firestore.
 OTP_STORE = {}
 OTP_EXPIRY_SECONDS = 300  # 5 minutes
 
@@ -35,10 +34,13 @@ OTP_EXPIRY_SECONDS = 300  # 5 minutes
 app = Flask(__name__)
 # Allow CORS for your frontend URL for local testing/Render deployment
 ALLOWED_ORIGIN = "https://connecthub-xpy1.onrender.com"
-# ...
+# Correct CORS Configuration:
+# 1. CORS is applied to all routes under /api/*.
+# 2. It explicitly allows the necessary methods (POST, GET, OPTIONS).
+# 3. flask-cors will automatically handle the OPTIONS (preflight) request and inject headers.
 CORS(app, resources={r"/api/*": {
-    "origins": [ALLOWED_ORIGIN], # 👈 Use a list for robustness
-    "methods": ["GET", "POST", "OPTIONS"] # 👈 CRITICAL: Allows the preflight check
+    "origins": [ALLOWED_ORIGIN], 
+    "methods": ["GET", "POST", "OPTIONS"] 
 }})
 
 # --- Core Email Sending Function (Reused) ---
@@ -155,6 +157,78 @@ def verify_otp_endpoint():
         return jsonify({"status": "success", "message": "OTP verified successfully."}), 200
     else:
         return jsonify({"status": "error", "message": "Invalid OTP code."}), 400
+
+# --- NEW: AI Assistant Endpoint ---
+@app.route('/api/send-response', methods=['POST']) # 💥 FIX: Removed 'OPTIONS' here
+def send_support_ticket():
+    # 💥 FIX: Removed the manual check "if request.method == 'OPTIONS': return '', 200"
+    # flask-cors middleware handles the OPTIONS request for us now.
+    
+    try:
+        data = request.get_json()
+        
+        # 1. Extract required data from the frontend POST request
+        user_id = data.get('userId')
+        username = data.get('username')
+        user_email = data.get('receiver') 
+        concern = data.get('message')
+        if not all([username, user_email, concern]):
+            return jsonify({'success': False, 'message': 'Missing required fields (username, email, or concern).'}), 400
+
+        # --- 2. Send Notification Email to Admin ---
+        msg_admin = EmailMessage()
+        msg_admin['Subject'] = f"New Support Ticket from {username}"
+        msg_admin['From'] = SENDER_EMAIL
+        msg_admin['To'] = ADMIN_EMAIL
+        
+        admin_body = f"""
+        A new support ticket has been submitted:
+        
+        User ID: {user_id}
+        Username: {username}
+        Email: {user_email}
+        
+        Concern:
+        {concern}
+        
+        Please address this issue promptly.
+        """
+        msg_admin.set_content(admin_body)
+
+        # --- 3. Send Confirmation Email to User ---
+        msg_user = EmailMessage()
+        msg_user['Subject'] = "ConnectHub: We have received your support request"
+        msg_user['From'] = SENDER_EMAIL
+        msg_user['To'] = user_email
+        
+        user_body = f"""
+        Dear {username},
+
+        We have successfully received your support request regarding the following concern:
+
+        "{concern[:100]}..." 
+        
+        Our team will review your message and get back to you as soon as possible.
+        
+        Thank you for your patience,
+        The ConnectHub Team
+        """
+        msg_user.set_content(user_body)
+        
+        # --- 4. Send Emails via SMTP ---
+        # Note: Using hardcoded port 465 here. If you use 587 or another port, 
+        # ensure you use the logic from send_otp_email for starttls.
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(SENDER_EMAIL, SENDER_PASSWORD)
+            smtp.send_message(msg_admin)
+            smtp.send_message(msg_user)
+
+        # The Python server successfully handled the emails
+        return jsonify({'success': True, 'message': 'Support ticket received and emails sent successfully.'}), 200
+
+    except Exception as e:
+        print(f"Error handling /api/send-response (Support Ticket): {e}")
+        return jsonify({'success': False, 'message': 'Internal email service error.'}), 500
 
 if __name__ == '__main__':
     # Ensure all required environment variables are set before starting
